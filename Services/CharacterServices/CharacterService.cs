@@ -4,41 +4,71 @@ using System.Linq;
 using System.Threading.Tasks;
 using dotnet_rpg.Dtos.Character;
 using AutoMapper;
+using dotnet_rpg.Data;
+using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 namespace dotnet_rpg.Services.CharacterServices
 {
     public class CharacterService : ICharacterService
     {
-        private static List<Character> characters = new List<Character>{
-            new Character(),
-            new Character{Id=1, Name="Sam"}
-        };
+        // private static List<Character> characters = new List<Character>{
+        //     new Character(),
+        //     new Character{Id=1, Name="Sam"}
+        // };
 
         private readonly IMapper _mapper;
+        public DataContext _context;
+        private readonly IHttpContextAccessor _httpContextAccessor;
 
-        public CharacterService(IMapper mapper)
+        public CharacterService(IMapper mapper, DataContext context, IHttpContextAccessor httpContextAccessor)
         {
+            _context = context;
+            _httpContextAccessor = httpContextAccessor;
             _mapper = mapper;
         }
+
+        private int GetUserId() => int.Parse(_httpContextAccessor.HttpContext.User
+            .FindFirstValue(ClaimTypes.NameIdentifier));
 
         public async Task<ServiceResponse<List<GetCharacterDto>>> AddCharacter(AddCharacterDto newCharacter)
         {
             var serviseResponse = new ServiceResponse<List<GetCharacterDto>>();
             var character = _mapper.Map<Character>(newCharacter);
-            character.Id = characters.Max(c => c.Id) + 1;
-            characters.Add(character);
-            serviseResponse.Data = characters.Select(c => _mapper.Map<GetCharacterDto>(c)).ToList();
+            character.User = await _context.Users.FirstOrDefaultAsync(u => u.Id == GetUserId());
+
+            _context.Characters.Add(character);
+            await _context.SaveChangesAsync();
+            serviseResponse.Data = await _context.Characters
+                .Where(c => c.User.Id == GetUserId())
+                .Select(c => _mapper.Map<GetCharacterDto>(c))
+                .ToListAsync();
             return serviseResponse;
         }
 
         public async Task<ServiceResponse<List<GetCharacterDto>>> DeleteCharacter(int id)
         {
+
             ServiceResponse<List<GetCharacterDto>> response = new ServiceResponse<List<GetCharacterDto>>();
             try
             {
-                var character = characters.First(c => c.Id == id);
-                characters.Remove(character);
-                response.Data = characters.Select(c => _mapper.Map<GetCharacterDto>(c)).ToList();
+                var character = await _context.Characters
+                    .FirstOrDefaultAsync(c => c.Id == id && c.User.Id == GetUserId());
+
+                if (character != null)
+                {
+                    _context.Characters.Remove(character);
+                    await _context.SaveChangesAsync();
+                    response.Data = _context.Characters
+                        .Where(c => c.User.Id == GetUserId())
+                        .Select(c => _mapper.Map<GetCharacterDto>(c)).ToList();
+                }
+                else
+                {
+                    response.Success = false;
+                    response.Message = "Character not found";
+                }
+
 
             }
             catch (Exception ex)
@@ -49,18 +79,32 @@ namespace dotnet_rpg.Services.CharacterServices
             return response;
         }
 
+        //public async Task<ServiceResponse<List<GetCharacterDto>>> GetAllCharacters(int userId)
         public async Task<ServiceResponse<List<GetCharacterDto>>> GetAllCharacters()
         {
-            return new ServiceResponse<List<GetCharacterDto>>
-            { Data = characters.Select(c => _mapper.Map<GetCharacterDto>(c)).ToList() };
+            var response = new ServiceResponse<List<GetCharacterDto>>();
+            var dbCharacters = await _context.Characters
+                //.Where(c=>c.User.Id==userId)
+                .Where(c => c.User.Id == GetUserId())
+                .ToListAsync();
+            response.Data = dbCharacters.Select(c => _mapper.Map<GetCharacterDto>(c)).ToList();
+            return response;
+            // return new ServiceResponse<List<GetCharacterDto>>
+            // { Data = characters.Select(c => _mapper.Map<GetCharacterDto>(c)).ToList() };
         }
 
         public async Task<ServiceResponse<GetCharacterDto>> GetCharacterById(int id)
         {
             var serviceResponse = new ServiceResponse<GetCharacterDto>();
-            var character = characters.FirstOrDefault(c => c.Id == id);
-            serviceResponse.Data = _mapper.Map<GetCharacterDto>(character);
+            var dbCharacter = await _context.Characters
+                .FirstOrDefaultAsync(c => c.Id == id && c.User.Id == GetUserId());
+            serviceResponse.Data = _mapper.Map<GetCharacterDto>(dbCharacter);
             return serviceResponse;
+
+            // var serviceResponse = new ServiceResponse<GetCharacterDto>();
+            // var character = characters.FirstOrDefault(c => c.Id == id);
+            // serviceResponse.Data = _mapper.Map<GetCharacterDto>(character);
+            // return serviceResponse;
         }
 
         public async Task<ServiceResponse<GetCharacterDto>> UpdateCharacter(UpdateCharacterDto updatedCharacter)
@@ -68,18 +112,41 @@ namespace dotnet_rpg.Services.CharacterServices
             ServiceResponse<GetCharacterDto> response = new ServiceResponse<GetCharacterDto>();
             try
             {
-                var character = characters.FirstOrDefault(c => c.Id == updatedCharacter.Id);
+                var character = await _context.Characters
+                    .Include(c => c.User)
+                    .FirstOrDefaultAsync(c => c.Id == updatedCharacter.Id);
 
-                _mapper.Map(updatedCharacter, character);
-                // character.Name = updatedCharacter.Name;
-                // character.HitPoints = updatedCharacter.HitPoints;
-                // character.Strength = updatedCharacter.Strength;
-                // character.Defence = updatedCharacter.Defence;
-                // character.Intelligence = updatedCharacter.Intelligence;
-                // character.Class = updatedCharacter.Class;
+                if (character.User.Id == GetUserId())
+                {
+                    _mapper.Map(updatedCharacter, character);
+                    character.Name = updatedCharacter.Name;
+                    character.HitPoints = updatedCharacter.HitPoints;
+                    character.Strength = updatedCharacter.Strength;
+                    character.Defence = updatedCharacter.Defence;
+                    character.Intelligence = updatedCharacter.Intelligence;
+                    character.Class = updatedCharacter.Class;
 
-                response.Data = _mapper.Map<GetCharacterDto>(character);
+                    await _context.SaveChangesAsync();
 
+                    response.Data = _mapper.Map<GetCharacterDto>(character);
+
+                    // var character = characters.FirstOrDefault(c => c.Id == updatedCharacter.Id);
+
+                    // _mapper.Map(updatedCharacter, character);
+                    // // character.Name = updatedCharacter.Name;
+                    // // character.HitPoints = updatedCharacter.HitPoints;
+                    // // character.Strength = updatedCharacter.Strength;
+                    // // character.Defence = updatedCharacter.Defence;
+                    // // character.Intelligence = updatedCharacter.Intelligence;
+                    // // character.Class = updatedCharacter.Class;
+
+                    // response.Data = _mapper.Map<GetCharacterDto>(character);
+                }
+                else
+                {
+                    response.Success = false;
+                    response.Message = "Character not found.";
+                }
             }
             catch (Exception ex)
             {
